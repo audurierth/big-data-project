@@ -1,0 +1,11 @@
+[project]
+name = "projet"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "ipykernel>=7.2.0",
+    "lxml==6.1.0",
+    "obonet==1.1.1",
+    "pandas==3.0.3",
+    "seaborn==0.13.2",
+]
