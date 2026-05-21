@@ -6,6 +6,7 @@
 sqlite3 medical_data.db
 .database
 ```
+3. Lancer src/gui.py
 
 ## Purposes of each dataset
 - DrugBank: contains several drugs, their properties and interactions with other drugs. It is used to analyze drug interactions and properties.
