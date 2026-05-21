@@ -58,11 +58,9 @@ class MedicalSearchGUI:
         notebooks.add(self.tab_drugs, text="Effets secondaires")
         notebooks.add(self.tab_treatments, text="Traitements")
 
-        self.disease_text = ScrolledText(self.tab_diseases, wrap="word", font=("Courier", 11))
-        self.disease_text.pack(fill="both", expand=True, padx=8, pady=8)
+        self.disease_tree = self._build_result_tree(self.tab_diseases)
 
-        self.drug_text = ScrolledText(self.tab_drugs, wrap="word", font=("Courier", 11))
-        self.drug_text.pack(fill="both", expand=True, padx=8, pady=8)
+        self.drug_tree = self._build_result_tree(self.tab_drugs)
 
         self.treat_text = ScrolledText(self.tab_treatments, wrap="word", font=("Courier", 11))
         self.treat_text.pack(fill="both", expand=True, padx=8, pady=8)
@@ -70,8 +68,8 @@ class MedicalSearchGUI:
     def _on_clear(self):
         self.query_var.set("")
         self.summary_var.set("Pret")
-        self._set_text(self.disease_text, "")
-        self._set_text(self.drug_text, "")
+        self._set_tree(self.disease_tree, [])
+        self._set_tree(self.drug_tree, [])
         self._set_text(self.treat_text, "")
 
     def _on_search(self, _event=None):
@@ -86,8 +84,8 @@ class MedicalSearchGUI:
             self.summary_var.set(f"Erreur: {exc}")
             return
 
-        diseases = sorted(result.get("diseases", []))
-        drugs = sorted(result.get("drugs_causing", []))
+        diseases = result.get("diseases", [])
+        drugs = result.get("drugs_causing", [])
         by_disease = result.get("treatments_by_disease", {})
         by_symptom = result.get("direct_treatments_by_symptom", {})
 
@@ -95,40 +93,63 @@ class MedicalSearchGUI:
             f"Resultats: {len(diseases)} maladie(s), {len(drugs)} medicament(s) causant ces symptomes"
         )
 
-        disease_lines = []
-        for disease in diseases[:200]:
-            disease_lines.append(format_disease_name(disease))
-        if not disease_lines:
-            disease_lines = ["Aucune maladie trouvee."]
-        self._set_text(self.disease_text, "\n".join(disease_lines))
+        self._set_tree(self.disease_tree, [(format_disease_name(disease["name"]), disease["score"], ", ".join(sorted(disease.get("sources", [])))) for disease in diseases[:200]])
+        if not diseases:
+            self._set_tree(self.disease_tree, [])
 
-        drug_lines = []
-        for drug in drugs[:200]:
-            drug_lines.append(f"{drug}")
-        if not drug_lines:
-            drug_lines = ["Aucun medicament trouve."]
-        self._set_text(self.drug_text, "\n".join(drug_lines))
+        self._set_tree(self.drug_tree, [(drug["name"], drug["score"], ", ".join(sorted(drug.get("sources", [])))) for drug in drugs[:200]])
+        if not drugs:
+            self._set_tree(self.drug_tree, [])
 
         treat_lines = ["Traitements potentiels par maladie:"]
         if by_disease:
-            for disease in sorted(by_disease.keys()):
+            for disease in sorted(by_disease.keys(), key=str.lower):
                 treat_lines.append(f"- {format_disease_name(disease)}")
                 for drug in by_disease[disease]:
-                    treat_lines.append(f"    -> {drug}")
+                    treat_lines.append(f"    -> {self._format_result_line(drug['name'], drug)}")
         else:
             treat_lines.append("Aucun traitement potentiel trouve via les maladies.")
 
         treat_lines.append("")
         treat_lines.append("Traitements directs par symptome:")
         if by_symptom:
-            for symptom in sorted(by_symptom.keys()):
+            for symptom in sorted(by_symptom.keys(), key=str.lower):
                 treat_lines.append(f"- {symptom}")
                 for drug in by_symptom[symptom]:
-                    treat_lines.append(f"    -> {drug}")
+                    treat_lines.append(f"    -> {self._format_result_line(drug['name'], drug)}")
         else:
             treat_lines.append("Aucun traitement direct trouve.")
 
         self._set_text(self.treat_text, "\n".join(treat_lines))
+
+    @staticmethod
+    def _build_result_tree(parent: ttk.Frame) -> ttk.Treeview:
+        frame = ttk.Frame(parent)
+        frame.pack(fill="both", expand=True, padx=8, pady=8)
+
+        tree = ttk.Treeview(frame, columns=("name", "score", "source"), show="headings")
+        tree.heading("name", text="Nom")
+        tree.heading("score", text="Score")
+        tree.heading("source", text="Source")
+        tree.column("name", width=520, minwidth=260, stretch=True, anchor="w")
+        tree.column("score", width=90, minwidth=70, stretch=False, anchor="center")
+        tree.column("source", width=260, minwidth=160, stretch=True, anchor="w")
+
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        xscrollbar = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=scrollbar.set, xscrollcommand=xscrollbar.set)
+
+        tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        xscrollbar.pack(side="bottom", fill="x")
+        return tree
+
+    @staticmethod
+    def _set_tree(tree: ttk.Treeview, rows):
+        for item in tree.get_children():
+            tree.delete(item)
+        for name, score, source in rows:
+            tree.insert("", "end", values=(name, score, source))
 
     @staticmethod
     def _set_text(widget: ScrolledText, text: str):
@@ -136,6 +157,14 @@ class MedicalSearchGUI:
         widget.delete("1.0", tk.END)
         widget.insert(tk.END, text)
         widget.configure(state="disabled")
+
+    @staticmethod
+    def _format_result_line(name: str, entry: dict) -> str:
+        score = entry.get("score", 0)
+        sources = ", ".join(sorted(entry.get("sources", [])))
+        if sources:
+            return f"{name} [score={score} | source={sources}]"
+        return f"{name} [score={score}]"
 
     def run(self):
         self.root.mainloop()
