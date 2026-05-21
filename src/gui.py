@@ -11,7 +11,7 @@ class MedicalSearchGUI:
         self.mediator = Mediator()
 
         self.root = tk.Tk()
-        self.root.title("Medical Data Explorer")
+        self.root.title("Exploreur de données médicales")
         self.root.geometry("980x680")
 
         self._build_ui()
@@ -28,7 +28,8 @@ class MedicalSearchGUI:
         title.pack(anchor="w", pady=(0, 8))
 
         help_text = (
-            "Saisir les symptomes avec AND (ex: fever AND blood in urine). "
+            "Saisir les symptomes avec OR ou AND (ex: fever and blood in urine). "
+            "Vous pouvez utiliser '*' comme joker partiel dans un symptome (ex: fev*)."
         )
         ttk.Label(container, text=help_text, wraplength=900).pack(anchor="w", pady=(0, 10))
 

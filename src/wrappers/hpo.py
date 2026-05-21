@@ -43,8 +43,17 @@ class HPO_Wrapper:
         self.data.commit()
 
     def retrieve_pathologyEffectId(self, secondaryEffect: str):
-        query = "SELECT hpo_id, name, synonyms FROM hpo_terms WHERE name = ? OR synonyms LIKE ?"
-        details = self.data.execute(query, (secondaryEffect.lower(), f"%{secondaryEffect.lower()}%")).fetchone()
+        term = (secondaryEffect or "").strip().lower()
+        term = term.replace("*", "%")
+
+        if "%" in term:
+            query = "SELECT hpo_id, name, synonyms FROM hpo_terms WHERE name LIKE ? OR synonyms LIKE ?"
+            params = (term, term)
+        else:
+            query = "SELECT hpo_id, name, synonyms FROM hpo_terms WHERE name = ? OR synonyms LIKE ?"
+            params = (term, f"%{term}%")
+
+        details = self.data.execute(query, params).fetchone()
         if details is None:
             print("Retrieved no data from HPO secondary effect term.")
             return None

@@ -69,7 +69,7 @@ class Mediator:
                 local_drug_results = {}
 
                 omim_results = self.omim.retrieve_disease_by_symptom(search_term)
-                hpo_id_data = self.hpo.retrieve_pathologyEffectId(search_term.replace("%", ""))
+                hpo_id_data = self.hpo.retrieve_pathologyEffectId(search_term)
 
                 for _, disease_name in omim_results:
                     register_result(local_disease_results, disease_name, "OMIM", symptom)
