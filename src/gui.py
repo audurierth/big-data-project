@@ -7,6 +7,7 @@ from tkinter.scrolledtext import ScrolledText
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import re
 
 from src.mediator import Mediator
 from src.utils import format_disease_name
@@ -34,7 +35,7 @@ class MedicalSearchGUI:
         title.pack(anchor="w", pady=(0, 8))
 
         help_text = (
-            "Saisir les symptomes avec OR ou AND (ex: fever and blood in urine). "
+            "Saisir les symptomes avec OR ou AND (ex: fever and nausea). "
             "Vous pouvez utiliser '*' comme joker partiel dans un symptome (ex: fev*)."
         )
         ttk.Label(container, text=help_text, wraplength=900).pack(anchor="w", pady=(0, 10))
@@ -43,7 +44,7 @@ class MedicalSearchGUI:
         query_row.pack(fill="x", pady=(0, 10))
 
         ttk.Label(query_row, text="Requete:").pack(side="left")
-        self.query_var = tk.StringVar(value="fever AND blood in urine")
+        self.query_var = tk.StringVar(value="fever OR hemorrhage OR rash OR fatigue OR headache OR conjunctivitis")
         self.query_entry = ttk.Entry(query_row, textvariable=self.query_var)
         self.query_entry.pack(side="left", fill="x", expand=True, padx=8)
         self.query_entry.bind("<Return>", self._on_search)
@@ -69,15 +70,18 @@ class MedicalSearchGUI:
         ttk.Label(container, textvariable=self.summary_var, foreground="#444").pack(anchor="w", pady=(0, 8))
 
         notebooks = ttk.Notebook(container)
+        self.notebooks = notebooks
         notebooks.pack(fill="both", expand=True)
 
         self.tab_diseases = ttk.Frame(notebooks)
         self.tab_drugs = ttk.Frame(notebooks)
         self.tab_treatments = ttk.Frame(notebooks)
+        self.tab_stats = ttk.Frame(notebooks)
 
         notebooks.add(self.tab_diseases, text="Maladies")
         notebooks.add(self.tab_drugs, text="Effets secondaires")
         notebooks.add(self.tab_treatments, text="Traitements")
+        notebooks.add(self.tab_stats, text="Statistiques")
 
         self.disease_tree = self._build_result_tree(self.tab_diseases)
 
@@ -86,12 +90,16 @@ class MedicalSearchGUI:
         self.treat_text = ScrolledText(self.tab_treatments, wrap="word", font=("Courier", 11))
         self.treat_text.pack(fill="both", expand=True, padx=8, pady=8)
 
+        self.stats_text = ScrolledText(self.tab_stats, wrap="word", font=("Courier", 11))
+        self.stats_text.pack(fill="both", expand=True, padx=8, pady=8)
+
     def _on_clear(self):
         self.query_var.set("")
         self.summary_var.set("Pret")
         self._set_tree(self.disease_tree, [])
         self._set_tree(self.drug_tree, [])
         self._set_text(self.treat_text, "")
+        self._set_text(self.stats_text, "")
 
     def _on_stats(self):
         try:
@@ -102,10 +110,58 @@ class MedicalSearchGUI:
                     lines.append(f"\n{k}")
                 else:
                     lines.append(f"{k}: {v}")
-            self._set_text(self.treat_text, "\n".join(lines))
-            self.summary_var.set("Statistiques affichées dans l'onglet Traitements.")
+            self._set_text(self.stats_text, "\n".join(lines))
+            self.summary_var.set("Statistiques affichées dans l'onglet Statistiques.")
+            self.notebooks.select(self.tab_stats)
         except Exception as exc:
             self.summary_var.set(f"Erreur lors du calcul des statistiques: {exc}")
+
+    @staticmethod
+    def _combine_sider_sources(sources):
+        sider_sources = [s for s in sources if 'sider' in str(s).lower()]
+        if not sider_sources:
+            return sources
+        
+        best_sider = "SIDER"
+        best_proba = -1.0
+        
+        for s in sider_sources:
+            m = re.search(r'(\d+(?:\.\d+)?)%', str(s))
+            if m:
+                val = float(m.group(1))
+                if val > best_proba:
+                    best_proba = val
+                    best_sider = str(s)
+                    
+        if best_proba == -1.0:
+            for s in sider_sources:
+                if "(" in str(s):
+                    best_sider = str(s)
+                    break
+        
+        # Filtre les autres sources non-sider
+        combined = [str(s) for s in sources if 'sider' not in str(s).lower()]
+        combined.append(best_sider)
+        return combined
+
+    def _get_sort_key_fn(self):
+        sort_method = self.sort_var.get()
+        def get_max_proba(sources):
+            mm = 0.0
+            for s in sources:
+                m = re.search(r'(\d+(?:\.\d+)?)%', str(s))
+                if m: mm = max(mm, float(m.group(1)))
+            return mm
+            
+        def sort_item(x):
+            nb_symptoms = x.get('score', 0)
+            proba = get_max_proba(x.get('sources', []))
+            
+            if "Proba SIDER totale" in sort_method:
+                return (-proba, -nb_symptoms)
+            else: # Default
+                return (-nb_symptoms, -proba)
+        return sort_item
 
     def _on_visualize(self):
         query = self.query_var.get().strip()
@@ -115,8 +171,12 @@ class MedicalSearchGUI:
         
         try:
             result = self.mediator.query_symptoms(query, verbose=False)
-            diseases = result.get("diseases", [])[:10]
-            drugs = result.get("drugs_causing", [])[:10]
+            diseases = result.get("diseases", [])
+            drugs = result.get("drugs_causing", [])
+            
+            sort_fn = self._get_sort_key_fn()
+            diseases = sorted(diseases, key=sort_fn)[:10]
+            drugs = sorted(drugs, key=sort_fn)[:10]
             
             if not diseases and not drugs:
                 self.summary_var.set("Aucun résultat à visualiser pour cette requête.")
@@ -129,7 +189,7 @@ class MedicalSearchGUI:
                 df_d = pd.DataFrame(diseases)
                 # Ajout des sources directement dans le label Y pour plus d'ergonomie
                 df_d['name_short'] = df_d.apply(
-                    lambda row: format_disease_name(row['name'])[:45] + ("..." if len(format_disease_name(row['name'])) > 45 else "") + f"\n[{', '.join(sorted(row['sources']))}]", 
+                    lambda row: format_disease_name(row['name'])[:45] + ("..." if len(format_disease_name(row['name'])) > 45 else "") + f"\n[{', '.join(sorted(self._combine_sider_sources(row['sources'])))}]", 
                     axis=1
                 )
                 sns.barplot(data=df_d, y='name_short', x='score', hue='name_short', dodge=False, legend=False, ax=axes[0], palette='crest')
@@ -142,7 +202,7 @@ class MedicalSearchGUI:
                 df_dr = pd.DataFrame(drugs)
                 # Pareil pour les médicaments avec ajout des pourcentages s'ils existent
                 df_dr['label_full'] = df_dr.apply(
-                    lambda row: row['name'][:45] + ("..." if len(row['name']) > 45 else "") + f"\n[{', '.join(sorted(row['sources']))}]", 
+                    lambda row: row['name'][:45] + ("..." if len(row['name']) > 45 else "") + f"\n[{', '.join(sorted(self._combine_sider_sources(row['sources'])))}]", 
                     axis=1
                 )
                 sns.barplot(data=df_dr, y='label_full', x='score', hue='label_full', dodge=False, legend=False, ax=axes[1], palette='flare')
@@ -174,36 +234,19 @@ class MedicalSearchGUI:
         by_disease = result.get("treatments_by_disease", {})
         by_symptom = result.get("direct_treatments_by_symptom", {})
 
-        sort_method = self.sort_var.get()
-        import re
-        def get_max_proba(sources):
-            mm = 0.0
-            for s in sources:
-                m = re.search(r'(\d+(?:\.\d+)?)%', s)
-                if m: mm = max(mm, float(m.group(1)))
-            return mm
-            
-        def sort_item(x):
-            nb_symptoms = x.get('score', 0)
-            proba = get_max_proba(x.get('sources', []))
-            
-            if "Proba SIDER totale" in sort_method:
-                return (-proba, -nb_symptoms)
-            else: # Default
-                return (-nb_symptoms, -proba)
-
-        diseases = sorted(diseases, key=sort_item)
-        drugs = sorted(drugs, key=sort_item)
+        sort_fn = self._get_sort_key_fn()
+        diseases = sorted(diseases, key=sort_fn)
+        drugs = sorted(drugs, key=sort_fn)
 
         self.summary_var.set(
             f"Resultats: {len(diseases)} maladie(s), {len(drugs)} medicament(s) causant ces symptomes"
         )
 
-        self._set_tree(self.disease_tree, [(format_disease_name(disease["name"]), disease["score"], ", ".join(sorted(disease.get("sources", [])))) for disease in diseases[:200]])
+        self._set_tree(self.disease_tree, [(format_disease_name(disease["name"]), disease["score"], ", ".join(sorted(self._combine_sider_sources(disease.get("sources", []))))) for disease in diseases[:200]])
         if not diseases:
             self._set_tree(self.disease_tree, [])
 
-        self._set_tree(self.drug_tree, [(drug["name"], drug["score"], ", ".join(sorted(drug.get("sources", [])))) for drug in drugs[:200]])
+        self._set_tree(self.drug_tree, [(drug["name"], drug["score"], ", ".join(sorted(self._combine_sider_sources(drug.get("sources", []))))) for drug in drugs[:200]])
         if not drugs:
             self._set_tree(self.drug_tree, [])
 

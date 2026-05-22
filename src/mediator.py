@@ -253,4 +253,4 @@ class Mediator:
 
 if __name__ == "__main__":
     mediator = Mediator()
-    mediator.query_symptoms("fever AND Blood in urine")
+    mediator.query_symptoms("fever OR hemorrhage OR rash OR fatigue OR headache OR conjunctivitis")
