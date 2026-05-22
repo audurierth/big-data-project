@@ -12,6 +12,7 @@ class SIDER_Wrapper:
     ATC_PATH = os.path.join(PROJECT_ROOT, "assets", "STITCH - ATC", "br08303.keg")
     STITCH_PATH = os.path.join(PROJECT_ROOT, "assets", "STITCH - ATC", "chemical.sources.v5.0.tsv.gz")
     SIDER_SE_PATH = os.path.join(PROJECT_ROOT, "assets", "SIDER", "meddra_all_se.tsv")
+    SIDER_FREQ_PATH = os.path.join(PROJECT_ROOT, "assets", "SIDER", "meddra_freq.tsv")
     SIDER_IND_PATH = os.path.join(PROJECT_ROOT, "assets", "SIDER", "meddra_all_indications.tsv")
     
     def __init__(self):
@@ -29,6 +30,7 @@ class SIDER_Wrapper:
             CREATE TABLE IF NOT EXISTS sider_side_effects (
                 stitch_id INTEGER,
                 side_effect TEXT,
+                frequency TEXT,
                 FOREIGN KEY(stitch_id) REFERENCES sider_drugs(stitch_id)
             )
         """)
@@ -72,7 +74,35 @@ class SIDER_Wrapper:
                             except Exception:
                                 pass
         
-        # 3. Process Side Effects
+        # 3. Process Frequencies
+        freq_map = {}
+        if os.path.exists(self.SIDER_FREQ_PATH):
+            with open(self.SIDER_FREQ_PATH, 'r') as f:
+                for line in f:
+                    parts = line.strip().split('\t')
+                    if len(parts) >= 10 and parts[7] == 'PT':
+                        if "placebo" in parts[3].lower():
+                            continue
+                        freq_str = parts[4].strip()
+                        if not freq_str:
+                            continue
+                        
+                        try:
+                            cid1 = int(parts[0][4:])
+                            cid2 = int(parts[1][4:])
+                        except:
+                            continue
+                            
+                        stitch_id = None
+                        if cid1 in cid_to_atc: stitch_id = cid1
+                        elif cid2 in cid_to_atc: stitch_id = cid2
+                        elif int(parts[0][3:]) in cid_to_atc: stitch_id = int(parts[0][3:])
+                        
+                        if stitch_id:
+                            se_name = parts[9].strip().lower()
+                            freq_map[(stitch_id, se_name)] = freq_str
+
+        # 4. Process Side Effects
         se_records = set()
         drug_records = {} # stitch_id -> (atc, label)
         
@@ -101,9 +131,11 @@ class SIDER_Wrapper:
                         atc = cid_to_atc[stitch_id]
                         label = atc_to_label.get(atc, "unknown")
                         drug_records[stitch_id] = (atc, label)
-                        se_records.add((stitch_id, parts[5].strip().lower()))
+                        se_name = parts[5].strip().lower()
+                        freq = freq_map.get((stitch_id, se_name), "")
+                        se_records.add((stitch_id, se_name, freq))
                         
-        # 4. Process Indications
+        # 5. Process Indications
         ind_records = set()
         with open(self.SIDER_IND_PATH, 'r') as f:
             for line in f:
@@ -131,7 +163,7 @@ class SIDER_Wrapper:
         # Save to DB
         self.cursor.executemany("INSERT OR IGNORE INTO sider_drugs VALUES (?, ?, ?)",
                                 [(k, v[0], v[1]) for k, v in drug_records.items()])
-        self.cursor.executemany("INSERT INTO sider_side_effects VALUES (?, ?)", list(se_records))
+        self.cursor.executemany("INSERT INTO sider_side_effects VALUES (?, ?, ?)", list(se_records))
         self.cursor.executemany("INSERT INTO sider_indications VALUES (?, ?)", list(ind_records))
         
         self.data.commit()
@@ -147,7 +179,7 @@ class SIDER_Wrapper:
 
     def retrieve_drugs_by_side_effect(self, side_effect: str):
         query = """
-            SELECT d.stitch_id, d.label 
+            SELECT d.stitch_id, d.label, s.frequency 
             FROM sider_drugs d 
             JOIN sider_side_effects s ON d.stitch_id = s.stitch_id 
             WHERE s.side_effect LIKE ? AND d.label != 'unknown'

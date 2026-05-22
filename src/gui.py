@@ -1,6 +1,12 @@
+import warnings
+warnings.filterwarnings("ignore")
+
 import tkinter as tk
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 from src.mediator import Mediator
 from src.utils import format_disease_name
@@ -43,7 +49,21 @@ class MedicalSearchGUI:
         self.query_entry.bind("<Return>", self._on_search)
 
         ttk.Button(query_row, text="Rechercher", command=self._on_search).pack(side="left", padx=(0, 8))
-        ttk.Button(query_row, text="Effacer", command=self._on_clear).pack(side="left")
+        ttk.Button(query_row, text="Effacer", command=self._on_clear).pack(side="left", padx=(0, 8))
+        ttk.Button(query_row, text="Statistiques", command=self._on_stats).pack(side="left", padx=(0, 8))
+        ttk.Button(query_row, text="Visualiser", command=self._on_visualize).pack(side="left", padx=(0, 16))
+
+        ttk.Label(query_row, text="Trier par :").pack(side="left", padx=(0, 4))
+        self.sort_var = tk.StringVar(value="Défaut (Nb symptômes > Proba SIDER)")
+        self.sort_cb = ttk.Combobox(
+            query_row, 
+            textvariable=self.sort_var, 
+            values=["Défaut (Nb symptômes > Proba SIDER)", "Proba SIDER totale (Décroissant)"],
+            state="readonly",
+            width=35
+        )
+        self.sort_cb.pack(side="left")
+        self.sort_cb.bind("<<ComboboxSelected>>", self._on_search)
 
         self.summary_var = tk.StringVar(value="Pret")
         ttk.Label(container, textvariable=self.summary_var, foreground="#444").pack(anchor="w", pady=(0, 8))
@@ -73,6 +93,70 @@ class MedicalSearchGUI:
         self._set_tree(self.drug_tree, [])
         self._set_text(self.treat_text, "")
 
+    def _on_stats(self):
+        try:
+            stats = self.mediator.get_statistics()
+            lines = ["--- Statistiques des sources de données ---", ""]
+            for k, v in stats.items():
+                if v == "":
+                    lines.append(f"\n{k}")
+                else:
+                    lines.append(f"{k}: {v}")
+            self._set_text(self.treat_text, "\n".join(lines))
+            self.summary_var.set("Statistiques affichées dans l'onglet Traitements.")
+        except Exception as exc:
+            self.summary_var.set(f"Erreur lors du calcul des statistiques: {exc}")
+
+    def _on_visualize(self):
+        query = self.query_var.get().strip()
+        if not query:
+            self.summary_var.set("Veuillez chercher une requête d'abord pour la visualisation.")
+            return
+        
+        try:
+            result = self.mediator.query_symptoms(query, verbose=False)
+            diseases = result.get("diseases", [])[:10]
+            drugs = result.get("drugs_causing", [])[:10]
+            
+            if not diseases and not drugs:
+                self.summary_var.set("Aucun résultat à visualiser pour cette requête.")
+                return
+                
+            fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+            fig.suptitle(f"Analyse des classements pour : {query}", fontsize=14, fontweight='bold')
+            
+            if diseases:
+                df_d = pd.DataFrame(diseases)
+                # Ajout des sources directement dans le label Y pour plus d'ergonomie
+                df_d['name_short'] = df_d.apply(
+                    lambda row: format_disease_name(row['name'])[:45] + ("..." if len(format_disease_name(row['name'])) > 45 else "") + f"\n[{', '.join(sorted(row['sources']))}]", 
+                    axis=1
+                )
+                sns.barplot(data=df_d, y='name_short', x='score', hue='name_short', dodge=False, legend=False, ax=axes[0], palette='crest')
+                axes[0].xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+                axes[0].set_title('Top Maladies (Scores & Sources)')
+                axes[0].set_xlabel('Score Fédéré')
+                axes[0].set_ylabel('')
+                
+            if drugs:
+                df_dr = pd.DataFrame(drugs)
+                # Pareil pour les médicaments avec ajout des pourcentages s'ils existent
+                df_dr['label_full'] = df_dr.apply(
+                    lambda row: row['name'][:45] + ("..." if len(row['name']) > 45 else "") + f"\n[{', '.join(sorted(row['sources']))}]", 
+                    axis=1
+                )
+                sns.barplot(data=df_dr, y='label_full', x='score', hue='label_full', dodge=False, legend=False, ax=axes[1], palette='flare')
+                axes[1].xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+                axes[1].set_title('Top Médicaments (Toxicité & Sources)')
+                axes[1].set_xlabel('Score Fédéré')
+                axes[1].set_ylabel('')
+                
+            plt.tight_layout()
+            plt.show()
+            self.summary_var.set("Visualisation générée avec succès.")
+        except Exception as exc:
+            self.summary_var.set(f"Erreur UI Visualisation: {exc}")
+
     def _on_search(self, _event=None):
         query = self.query_var.get().strip()
         if not query:
@@ -89,6 +173,27 @@ class MedicalSearchGUI:
         drugs = result.get("drugs_causing", [])
         by_disease = result.get("treatments_by_disease", {})
         by_symptom = result.get("direct_treatments_by_symptom", {})
+
+        sort_method = self.sort_var.get()
+        import re
+        def get_max_proba(sources):
+            mm = 0.0
+            for s in sources:
+                m = re.search(r'(\d+(?:\.\d+)?)%', s)
+                if m: mm = max(mm, float(m.group(1)))
+            return mm
+            
+        def sort_item(x):
+            nb_symptoms = x.get('score', 0)
+            proba = get_max_proba(x.get('sources', []))
+            
+            if "Proba SIDER totale" in sort_method:
+                return (-proba, -nb_symptoms)
+            else: # Default
+                return (-nb_symptoms, -proba)
+
+        diseases = sorted(diseases, key=sort_item)
+        drugs = sorted(drugs, key=sort_item)
 
         self.summary_var.set(
             f"Resultats: {len(diseases)} maladie(s), {len(drugs)} medicament(s) causant ces symptomes"
