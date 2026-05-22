@@ -2,6 +2,7 @@ from src.main import consts
 from src.wrappers.hpo import HPO_Wrapper
 from src.wrappers.drugbank import DrugBank_Wrapper
 from src.wrappers.omim import OMIM_Wrapper
+from src.wrappers.sider import SIDER_Wrapper
 
 class Mediator:
     def __init__(self):
@@ -9,6 +10,8 @@ class Mediator:
         self.hpo = HPO_Wrapper()
         self.drugbank = DrugBank_Wrapper()
         self.omim = OMIM_Wrapper()
+        self.sider = SIDER_Wrapper()
+
 
     def query_symptoms(self, query: str, verbose: bool = True):
         if verbose:
@@ -85,6 +88,10 @@ class Mediator:
                 for _, drug_name in drug_se_results:
                     register_result(local_drug_results, drug_name, "DrugBank", symptom)
 
+                sider_se_results = self.sider.retrieve_drugs_by_side_effect(search_term)
+                for _, drug_name in sider_se_results:
+                    register_result(local_drug_results, drug_name, "SIDER", symptom)
+
                 per_symptom_disease_buckets.append(local_disease_results)
                 per_symptom_drug_buckets.append(local_drug_results)
 
@@ -121,7 +128,7 @@ class Mediator:
                 print(f" - {disease['name']} [score={disease['score']} | sources={sources} | symptômes={symptoms}]")
 
         if verbose:
-            print(f"\nMédicaments causant {query} comme effet secondaire (DrugBank):")
+            print(f"\nMédicaments causant {query} comme effet secondaire (DrugBank + SIDER):")
             for drug in sorted_drugs[:10]:
                 sources = ", ".join(sorted(drug["sources"]))
                 symptoms = ", ".join(sorted(drug["matched_symptoms"]))
@@ -132,36 +139,60 @@ class Mediator:
             disease_name = disease["name"]
             disease_keyword = disease_name.split()[0].replace(",", "")
             if len(disease_keyword) > 3:
-                treatments = self.drugbank.retrieve_drugs_by_indication(disease_keyword)
-                if treatments:
+                treatments_db = self.drugbank.retrieve_drugs_by_indication(disease_keyword)
+                treatments_sider = self.sider.retrieve_drugs_by_indication(disease_keyword)
+                
+                # Deduplicate based on name
+                treatments_combined = {}
+                for _, t_name in treatments_db:
+                    treatments_combined[t_name] = ["DrugBank"]
+                for _, t_name in treatments_sider:
+                    if t_name in treatments_combined:
+                        treatments_combined[t_name].append("SIDER")
+                    else:
+                        treatments_combined[t_name] = ["SIDER"]
+                
+                if treatments_combined:
                     treatment_candidates[disease_name] = [
                         {
-                            "name": treatment_name,
-                            "score": 1,
-                            "sources": ["DrugBank"],
+                            "name": t_name,
+                            "score": len(srcs),
+                            "sources": srcs,
                         }
-                        for _, treatment_name in treatments[:3]
+                        for t_name, srcs in list(treatments_combined.items())[:3]
                     ]
                     if verbose:
                         print(f" [Traitement potentiel pour: {disease_name}]")
-                        for _, treatment_name in treatments[:3]:
-                            print(f"  -> {treatment_name} [source=DrugBank]")
+                        for t_name, srcs in list(treatments_combined.items())[:3]:
+                            print(f"  -> {t_name} [sources={', '.join(srcs)}]")
         direct_symptom_treatments = {}
         for symptom in sorted(all_symptoms):
-            symptom_treatments = self.drugbank.retrieve_drugs_by_indication(symptom)
-            if symptom_treatments:
+            symptom_treatments_db = self.drugbank.retrieve_drugs_by_indication(symptom)
+            symptom_treatments_sider = self.sider.retrieve_drugs_by_indication(symptom)
+            
+            # Deduplicate
+            treatments_combined = {}
+            for _, t_name in symptom_treatments_db:
+                treatments_combined[t_name] = ["DrugBank"]
+            for _, t_name in symptom_treatments_sider:
+                if t_name in treatments_combined:
+                    treatments_combined[t_name].append("SIDER")
+                else:
+                    treatments_combined[t_name] = ["SIDER"]
+                    
+            if treatments_combined:
                 direct_symptom_treatments[symptom] = [
                     {
-                        "name": treatment_name,
-                        "score": 1,
-                        "sources": ["DrugBank"],
+                        "name": t_name,
+                        "score": len(srcs),
+                        "sources": srcs,
                     }
-                    for _, treatment_name in symptom_treatments[:3]
+                    for t_name, srcs in list(treatments_combined.items())[:3]
                 ]
                 if verbose:
                     print(f" [Traitement direct pour: {symptom}]")
-                    for _, treatment_name in symptom_treatments[:3]:
-                        print(f"  -> {treatment_name} [source=DrugBank]")
+                    for t_name, srcs in list(treatments_combined.items())[:3]:
+                        print(f"  -> {t_name} [sources={', '.join(srcs)}]")
 
         return {
             "query": query,
