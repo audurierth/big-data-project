@@ -144,6 +144,27 @@ class MedicalSearchGUI:
         combined.append(best_sider)
         return combined
 
+    @staticmethod
+    def _group_diseases(diseases):
+        grouped = {}
+        for d in diseases:
+            fname = format_disease_name(d["name"])
+            if fname not in grouped:
+                grouped[fname] = {
+                    "name": fname,
+                    "score": d["score"],
+                    "sources": set(d.get("sources", []))
+                }
+            else:
+                grouped[fname]["score"] = max(grouped[fname]["score"], d["score"])
+                grouped[fname]["sources"].update(d.get("sources", []))
+        
+        # Convert sources back to list for compatibility
+        ans = list(grouped.values())
+        for a in ans:
+            a["sources"] = list(a["sources"])
+        return ans
+
     def _get_sort_key_fn(self):
         sort_method = self.sort_var.get()
         def get_max_proba(sources):
@@ -171,7 +192,7 @@ class MedicalSearchGUI:
         
         try:
             result = self.mediator.query_symptoms(query, verbose=False)
-            diseases = result.get("diseases", [])
+            diseases = self._group_diseases(result.get("diseases", []))
             drugs = result.get("drugs_causing", [])
             
             sort_fn = self._get_sort_key_fn()
@@ -189,7 +210,7 @@ class MedicalSearchGUI:
                 df_d = pd.DataFrame(diseases)
                 # Ajout des sources directement dans le label Y pour plus d'ergonomie
                 df_d['name_short'] = df_d.apply(
-                    lambda row: format_disease_name(row['name'])[:45] + ("..." if len(format_disease_name(row['name'])) > 45 else "") + f"\n[{', '.join(sorted(self._combine_sider_sources(row['sources'])))}]", 
+                    lambda row: row['name'][:45] + ("..." if len(row['name']) > 45 else "") + f"\n[{', '.join(sorted(self._combine_sider_sources(row['sources'])))}]", 
                     axis=1
                 )
                 sns.barplot(data=df_d, y='name_short', x='score', hue='name_short', dodge=False, legend=False, ax=axes[0], palette='crest')
@@ -229,7 +250,7 @@ class MedicalSearchGUI:
             self.summary_var.set(f"Erreur: {exc}")
             return
 
-        diseases = result.get("diseases", [])
+        diseases = self._group_diseases(result.get("diseases", []))
         drugs = result.get("drugs_causing", [])
         by_disease = result.get("treatments_by_disease", {})
         by_symptom = result.get("direct_treatments_by_symptom", {})
@@ -242,7 +263,7 @@ class MedicalSearchGUI:
             f"Resultats: {len(diseases)} maladie(s), {len(drugs)} medicament(s) causant ces symptomes"
         )
 
-        self._set_tree(self.disease_tree, [(format_disease_name(disease["name"]), disease["score"], ", ".join(sorted(self._combine_sider_sources(disease.get("sources", []))))) for disease in diseases[:200]])
+        self._set_tree(self.disease_tree, [(disease["name"], disease["score"], ", ".join(sorted(self._combine_sider_sources(disease.get("sources", []))))) for disease in diseases[:200]])
         if not diseases:
             self._set_tree(self.disease_tree, [])
 
@@ -307,10 +328,9 @@ class MedicalSearchGUI:
         widget.insert(tk.END, text)
         widget.configure(state="disabled")
 
-    @staticmethod
-    def _format_result_line(name: str, entry: dict) -> str:
+    def _format_result_line(self, name: str, entry: dict) -> str:
         score = entry.get("score", 0)
-        sources = ", ".join(sorted(entry.get("sources", [])))
+        sources = ", ".join(sorted(self._combine_sider_sources(entry.get("sources", []))))
         if sources:
             return f"{name} [score={score} | source={sources}]"
         return f"{name} [score={score}]"

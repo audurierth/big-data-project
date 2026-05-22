@@ -68,7 +68,7 @@ class Mediator:
                 entry["matched_symptoms"].add(symptom)
             is_drug = any(s.startswith("DrugBank") or "SIDER" in s for s in entry["sources"]) 
             if is_drug:
-                entry["score"] = entry["hits"]
+                entry["score"] = len(entry["matched_symptoms"])
             else:
                 entry["score"] = entry["hits"] + len(entry["sources"]) - 1
             return entry
@@ -89,7 +89,7 @@ class Mediator:
                 merged["matched_symptoms"].add(symptom)
             is_drug = any(s.startswith("DrugBank") or "SIDER" in s for s in merged["sources"]) 
             if is_drug:
-                merged["score"] = merged["hits"]
+                merged["score"] = len(merged["matched_symptoms"])
             else:
                 merged["score"] = merged["hits"] + len(merged["sources"]) - 1
             return merged
